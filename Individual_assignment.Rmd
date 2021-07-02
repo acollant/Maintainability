@@ -1,0 +1,419 @@
+---
+title: "Software defects research"
+author: 
+    -  Antonio Collante Caro (111 227 429)
+output: 
+  html_document  :
+    numbersections: true
+    pagetitle: "Individual Assigment"
+    toc: true
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = FALSE,
+                      warning = FALSE,
+                      message = FALSE)
+
+
+
+rm(list = ls(all.names = TRUE)) #will clear all objects includes hidden objects.
+gc() 
+
+
+library(lubridate)
+library(tidyverse)
+library(gtrendsR)
+library(markdown)
+library(ggplot2)
+library(caret)
+library(rlang)
+library(dplyr)
+library(httr)
+library(pROC)
+library(rpart)
+library(rpart.plot)
+library(class)
+library(GGally)
+
+##=========================================================================================
+##                  Function to import from csv files
+##=========================================================================================
+import <- function ( file_path_, skip_value_ )
+{
+  files_names_  = list.files( path = file_path_, 
+                              recursive = FALSE, 
+                              pattern = '*.csv' )
+  
+  full_path_ = file.path ( file_path_ , files_names_ ) 
+  
+  data_file_ = full_path_	%>%
+               map( read_csv  )  %>% 
+               reduce( rbind ) 
+  
+  return ( data_file_ )
+}
+##=========================================================================================
+
+
+##=========================================================================================
+##  Function to read all the cvs files and load the content into a tibble data structure
+##=========================================================================================
+import_single_cvs <- function ( file_path_, file_name_  ){
+  
+  full_path_ <- file.path ( file_path_ , file_name_ ) 
+  file_ = read.csv(full_path_)
+  print(full_path_)
+  return( file_ )
+}
+##=========================================================================================
+
+
+##=========================================================================================
+##  Function to count the elements by columns
+##=========================================================================================
+count_element_split <- function(values_){
+  c_col_values_ <- unique(tibble(cols = unlist ( str_split( values_ , "([\\|])", 10))))
+  c_col_values_$cols <- ifelse(c_col_values_$cols=="", NA,c_col_values_$cols)
+  c_col_values_ <- c_col_values_ %>%  na.omit() 
+  return ( nrow(c_col_values_) )
+}
+##=========================================================================================
+
+##=========================================================================================
+##  Function to get the mode of a given column
+##=========================================================================================
+ getMode <- function(cols_values, criteria_ ) {
+   
+   values_ <- cols_values
+   if (!is.na(criteria_)) values_ <- filter(cols_values,y==criteria_) %>% select(x) %>% na.omit()
+   
+   keys <- na.omit(unique(values_$x)) 
+   mode_ <- keys[which.max(tabulate(match(values_, keys)))]
+   
+   return(mode_)
+   
+ }
+
+##=========================================================================================
+##  Function to normalize the columns
+##=========================================================================================
+normalize <- function(x){
+  return ( (x - min(x) ) / ( max(x) - min(x) ))
+}
+##=========================================================================================
+
+##=========================================================================================
+##  Function to Calcul the Classification  error
+##=========================================================================================
+classification_error <- function(actual , predicted){
+  err_  <- mean ( actual != predicted    )
+  
+  return ( err_ )
+}
+##======
+##=========================================================================================
+##  Function to run KNN with known K
+##=========================================================================================
+run_model_KNN <- function(k_, data.training_,  trainControl_ ){
+  
+    #Run Model for first time
+    set.seed(278523)
+    model_  = train( Class ~ .,
+                       data = data.training,
+                       method = "knn",
+                       preProc = c("center", "scale"),
+                       trControl = trainControl_,
+                       tuneLength = 10,
+                       k = k_,
+                    )
+  
+  return (model_)
+}
+
+##=========================================================================================
+##  Function to run and/or save the model
+##=========================================================================================
+run_model <- function(file_path_="data", model_method_name_, data.training_,  trainControl_ ){
+  
+  file_name_ = (paste(model_method_name_,'rds',sep ='.'))
+  file_ <- file.path ( file_path_ , file_name_ )
+  
+  print(model_method_name_)
+  
+  if(!file.exists(file_))
+  {
+    #Run Model for first time
+    set.seed(278523)
+    if ("knn" %in% model_method_name_ ) {
+        model_  = train( Class ~ .,
+                       data = data.training,
+                       method = "knn",
+                       preProc = c("center", "scale"),
+                       trControl = trainControl_,
+                       tuneLength = 10
+                       )
+    }
+    # Save model
+    print ("Saving model")
+    print(file_)
+    saveRDS(model_, file_)
+    print (paste(file_,"- saved!"))
+    
+  }else{
+    print("Load model from file")
+    model_ = readRDS(file_)
+  }
+  
+  return (model_)
+}
+
+```
+
+# 1 Problem - defect in Software quality
+
+## 1.1 Description  
+In the context of Software Engineering, software quality refers to : 1. the degree to which the correct software was produced  and 2. the degree to which the software works as needed. \
+
+Maintainability includes concepts of modularity, understandability, changeability, testability, reusability, and transferability from one development team to another. These do not take the form of critical issues at the code level. Rather, poor maintainability is typically the result of thousands of minor violations with best practices in documentation, complexity avoidance strategy, and basic programming practices that make the difference between clean and easy-to-read code vs. unorganized and difficult-to-read code
+
+That being said, one of the major concerns in Software Engineering is to deliver software solutions that comply with quality mainly to _`maintainability`_. I selected a research topic that has to do with **_`the relationship between McCabe software metrics and Halstead measures and the reported defects`_**.
+
+## 1.2 Dataset 
+
+Data comes from McCabe and Halstead features extractors of source code.  These features were defined in an attempt to objectively characterize code features that are associated with software quality.  
+```{r upload , echo=FALSE}
+
+    ## Import for CSV previously downloaded from the OECD website
+    INPUT_DATA_FILE_PATH  <- "data"
+    data.file.imported_   <- import_single_cvs ( INPUT_DATA_FILE_PATH, "softwaremetrics.csv")
+    
+    ## Display the first three (5) rows (without any operation)
+    some.rows_  <- head(data.file.imported_, 3)
+    
+    # Check out for missing explicit values
+    count.is.na_ = data.file.imported_ %>% summarize(na_count = sum(is.na(.)))  
+    
+    nbr.of.observation_ <- data.file.imported_ %>% summarize ( count = n() ) 
+    
+    column.data.type_ <- data.file.imported_ %>% map(typeof)
+    
+```
+## 1.3 After the import
+
+* _Number of observations:_
+```{r echo = FALSE}
+   nbr.of.observation_
+```
+
+* _Following the ten (10) first rows of the dataset without any Exploration Data Analysis (EDA):_ 
+```{r echo = FALSE}
+   some.rows_
+```
+
+* _Attribute Information (22 columns) :_\
+5 different lines of code measure, \
+3 McCabe metrics, \
+4 base Halstead measures, \
+8 derived Halstead measures,\
+1 branch-count, \
+1 goal field\
+```{r echo = FALSE}
+   column.data.type_
+```
+
+# 2 Exploratory Data Analysis - EDA
+
+## 2.1 Data analysis and manipulation
+
+_`Number of missing values:`_\
+```{r echo = FALSE}
+  
+count.is.na_
+  #str(data.file.imported_) 
+  data.file.imported_ %>% filter_all(any_vars(is.na(.)))
+  
+  data.file.imported_ <- data.file.imported_ %>% mutate ( uniq_Op = ifelse(is.na(uniq_Op),mean(data.file.imported_$uniq_Op  , na.rm = TRUE), uniq_Op))
+  
+  data.file.imported_ <- data.file.imported_ %>% mutate ( uniq_Opnd = ifelse(is.na(uniq_Opnd),mean(data.file.imported_$uniq_Opnd  , na.rm = TRUE), uniq_Opnd))
+  
+  data.file.imported_ <- data.file.imported_ %>% mutate ( total_Op = ifelse(is.na(total_Op),mean(data.file.imported_$total_Op  , na.rm = TRUE), total_Op))
+  
+  data.file.imported_ <- data.file.imported_ %>% mutate ( total_Opnd = ifelse(is.na(total_Opnd),mean(data.file.imported_$total_Opnd  , na.rm = TRUE), total_Opnd))
+  
+  data.file.imported_ <- data.file.imported_ %>% mutate ( branchCount = ifelse(is.na(branchCount),mean(data.file.imported_$branchCount  , na.rm = TRUE),
+                                                                               branchCount)) 
+  
+  str(data.file.imported_) 
+  
+```   
+I removed the NA's values from the columns prevously displayed by calculating and assigning the MEAN value to the NA's found.\
+_`Number of missing values after manipulation of the NA's:`_\
+
+```{r echo = FALSE}
+    data.file.imported_ %>% filter_all(any_vars(is.na(.)))
+    count.is.na_ = data.file.imported_ %>% summarize(na_count = sum(is.na(.)))  
+```  
+
+## 2.2 Correlation between variables
+
+Following it is shown the corralation between _`the McCabe metrics and Halstead measures`_ and _`the reported defects`_ per modules: 
+
+```{r context, warning=FALSE}
+
+    data.McCabe_ <- data.file.imported_ %>% select(loc,v_g, ev_g,iv_g,v, l, d ,i , e, branchCount ,defects)
+    
+    g_ <- data.McCabe_ %>% select (loc,v_g, ev_g,iv_g ,defects)
+    ggpairs(g_,title = 'Figure 1. Correlation between defects and McCabe metrics') # 
+    g_ <- data.McCabe_ %>% select(v, l, d ,i , e, branchCount ,defects)
+    ggpairs(g_,title = 'Figure 2. Correlation between defects and  Halstead measures') # 
+    
+    print('First 10 observations of McCabe subset')
+    head(data.McCabe_,10)
+```
+
+# 3 k-nearest neighbors (KNNs) Model 
+
+## 3.1 Parameters
+
+I chose the _`k-nearest neighbors (KNNs) model for classification using the Caret package`_ to study the selected research topic. During the EDA, I realized that there were some variables whose values are on widely different scales, the distance value between samples will be biased towards predictors with larger scales. To allow each predictor to contribute equally to the distance calculation, it is recommended to center and scale to avoid bias. So, I applied  preProc = c("center","scale") within the _`Train`_ method.
+
+train( Class ~ ., \
+        data = data.training,\
+        method = "knn",\
+        **preProc = c("center", "scale")**,\
+        trControl = trainControl_,\
+        tuneLength = 10\
+       )\
+ 
+I created the _`training and test partition`_ by applying the the 80:20 rules: 80% of samples for training and 20% for testing. Then, I created the model as follows:\
+trainControl_  : trainControl(method = "repeatedcv", number =  10, repeats = 10 ) \
+tuneLength = 10\
+
+To modify the resampling method, a _`trainControl`_ function is used. The _`repeatedcv`_ is used to specify repeated K-fold cross-validation (and the argument repeats controls the number of repetitions). K is controlled by the number argument and defaults to 10. The _`repeatedcv`_ in this case means that each repeat is random split of data into 10 fold, where training/testing data in first iteration of Repeat1 will not be same as Repeat2 and so on. This indicates taht repeating k-fold cross-validation can be used to effectively increase the precision of the estimates while still maintaining a small bias.
+
+Since KNN tries to find the best set of parameters influence the accuracy of a model, I use _`tuneLength`_ to change the candidate values of the tuning parameter.The train function can generate a candidate set of parameter values and the tuneLength argument controls how many are evaluated. In this case setting tuneLength = 10, the function uses a sequence of integers from 1 to tuneLength to evaluate all integers between 1 and 10.
+
+Reference to the Caret package: https://cran.r-project.org/web/packages/caret/vignettes/caret.html
+
+
+## 3.2 Training
+
+**Note:** I created a function _`run_model`_ where I run the KNN model based on some parameters (outfile , method, dataset, trainControl). In addition, since running the KNN model could be a time consuming task, I saved the model in the knn.rds file to avoid the execution of the model at every time the project is ran. So if the file exists, the model will be read from the file; otherwise it will be calculated by executing the function run_model.\
+
+Based on the Accuracy values from the training dataset, the value used for the model was k = 21 as shown in figure 3.
+
+```{r entrainement, warning=FALSE}
+
+    data.McCabe_ <-  data.McCabe_ %>% rename_at(vars(defects), ~'Class')
+    
+    data.McCabe_$Class <- factor(data.McCabe_$Class)
+    
+    # Randomly  split data into training and test set
+    set.seed(278523)
+    index_        <- sample(2, nrow(data.McCabe_),  replace = T, prob= c(0.8,0.2))
+    data.training <- data.McCabe_[index_  == 1,]
+    data.test     <- data.McCabe_[index_  == 2,] 
+    
+     
+    ##=========================================================================================
+    ##                   Compute the KNN model
+    ##=========================================================================================
+    
+    # Set the trainControl object
+    trainControl_ <- trainControl(method = "repeatedcv",
+                                 number =  10, 
+                                 repeats = 10
+                                 )
+     
+    #Execute/Get the training model
+    model.knn <-  run_model(INPUT_DATA_FILE_PATH,
+                           'knn',
+                           data.training,
+                           trainControl_
+                           )
+    print(model.knn)
+    
+```
+
+
+Following in figure 3, it is shown The final value used for the model of k = 21 obtained during the training:
+
+```{r analyse1.1}
+  
+  #scatter.smooth(x = model.knn$iv_g , y = model.knn$ev_g)
+ggplot(data = tibble(k = model.knn$results$k, Accuracy = model.knn$results$Accuracy),
+           aes(x = k, y = Accuracy)) +
+          geom_line() + geom_point() +
+          labs(title = "Figure 3. K value according to the accuracy values of the model")
+    
+```
+
+Here it is shown the _`returning predicted probabilities`_ for the first 10 observations in the _`training set`_. These are the probabilities for both possible classes, stored in columns
+
+```{r analyse1.training}
+ 
+ # Make predictions on the training data
+ data.predict.knn.train <- predict(model.knn , newdata = data.training, type = "prob" )
+ print(head(data.predict.knn.train,10))
+ 
+```
+
+## 3.2 Predict 
+
+Here it is shown the returning _`predicted probabilities`_ for the first 10 observations in the _`test set`_. These are the probabilities for both possible classes, stored in columns
+
+```{r analyse1.predict}
+  
+  # Make predictions on the test data
+  data.predict.knn.test <- predict(model.knn , newdata = data.test , type = "prob")
+  print(head(data.predict.knn.test,10))
+  
+```
+
+
+## 3.3 Evaluation
+
+### 3.3.1 Classification error
+
+After obtaining the classification for the model using the test set with a K = 21, then I calculate the  _`the classification error rate :`_   \
+_`e = y - ŷ`_, where _`y`_ is the actual value and _`ŷ`_ is the value calculated by the predicted test dataset. An error rate closes to zero (0) means than that the model has a good performance. The obtained _`error rate is equals to 0.1883205`_ for the model which make us think that we have a good model.
+
+```{r analyse1.evaluation}
+
+   data.predict.knn.test <- predict(model.knn , newdata = data.test)
+   classification_error (data.test$Class , data.predict.knn.test)
+ 
+```
+
+
+### 3.3.2 Confusion Matrix
+
+A common method for describing the performance of a classification model is the confusion matrix that is a simple cross-tabulation of the observed and predicted classes for the data. According to the diagonal cells, the number of cases correctly predicted or _`true positives  is 1736`_ while is high. However, the number of cases correctly predicted or _`true negatives is 57`_ which is actually a good indicator. For the number of errors for each possible cases or _`false positive  is actually a bit high 373`_. 
+
+
+```{r analyse1.3}
+
+confusionMatrix_ <- confusionMatrix( table ( predicted  =  data.predict.knn.test ,
+                                              actual    =  data.test$Class ),
+                                      positive = 'FALSE')
+confusionMatrix_$table 
+ 
+c(confusionMatrix_$overall['Accuracy'],
+confusionMatrix_$byClass['Sensitivity'],
+confusionMatrix_$byClass['Specificity'])
+```
+
+
+A straighfoward statistic is the _`accuracy rate`_. The result of the accuracy for the model is 0.8116 which reflets a good agreement between the observed and predicted classes.\
+
+The _`sensitivity or true positive rate`_ of the model is 0.9758. This mesuares the accuracy in the event population. This describes what proportion of free of defect software modules are correctly identified as having no defects. If this value is high means that we are not missing or excluding many software modules with no defects. If low, the sofware modules will not get the correction or the attention required.  \
+
+The _`specificity or true negative rate`_ of the model is 0.1325 meaning the rate of "defects" software modules that are identified as "defects". If this is high means that "defect" in software modules are actually classified as "defect". This statistic is very important as we are intersted in knowing the observations classified as no defect (low rate), but they could lead to a defect in the quality of the software.\
+
+```{r analyse1.4}
+
+c(confusionMatrix_$overall['Accuracy'],
+confusionMatrix_$byClass['Sensitivity'],
+confusionMatrix_$byClass['Specificity'])
+```
